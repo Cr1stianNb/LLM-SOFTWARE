@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Book",
+  "type": "object",
+  "required": ["title", "price", "availability", "rating", "category"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "The book's title as shown in the page heading."
+    },
+    "price": {
+      "type": "number",
+      "description": "Price as a float, currency stripped (GBP on this site)."
+    },
+    "availability": {
+      "type": "integer",
+      "description": "Number of copies in stock. 0 if out of stock."
+    },
+    "rating": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "Star rating 1-5, decoded from the 'star-rating One/Two/...' class."
+    },
+    "category": {
+      "type": "string",
+      "description": "Category from the breadcrumb navigation."
+    }
+  },
+  "additionalProperties": false
+}

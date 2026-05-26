@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scrapy-pipeline"
+version = "0.1.0"
+description = "Multi-agent CLI for web scraping using Anthropic Claude"
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    "anthropic>=0.40.0",
+    "playwright>=1.45.0",
+    "click>=8.1.7",
+    "jsonschema>=4.22.0",
+    "beautifulsoup4>=4.12.3",
+    "lxml>=5.2.2",
+    "rich>=13.7.1",
+    "python-dotenv>=1.0.1",
+]
+
+[project.scripts]
+scrapy-pipeline = "scrapy_cli.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["scrapy_cli*"]
