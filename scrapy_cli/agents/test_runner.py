@@ -20,7 +20,7 @@ from ..tools.filesystem import (
     FilesystemSandbox,
     dispatch_filesystem_tool,
 )
-from .base import AgentClient, AgentResult
+from .base import AgentResult, make_agent
 
 SYSTEM = """You are the Test Runner Agent.
 
@@ -55,6 +55,8 @@ def run_test_runner(
     sandbox: FilesystemSandbox,
     console: Console,
     model: str,
+    api_base_url: str | None = None,
+    api_key: str | None = None,
 ) -> tuple[AgentResult | None, dict]:
     """Run all tests. We use the deterministic path by default — fewer tokens.
 
@@ -62,7 +64,7 @@ def run_test_runner(
     """
     direct = run_tests_direct(scraper_path=scraper_path, tests=tests)
     out_path.write_text(json.dumps(direct, indent=2, ensure_ascii=False), encoding="utf-8")
-    console.log(f"  [green]✓ test results → {out_path}[/green]")
+    console.log(f"  [green]test results -> {out_path}[/green]")
     return None, direct
 
 

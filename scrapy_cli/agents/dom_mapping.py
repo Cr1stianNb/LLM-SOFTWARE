@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.console import Console
 
 from ..tools.browser import BROWSER_TOOL_SCHEMAS, BrowserSession, dispatch_browser_tool
-from .base import AgentClient, AgentResult
+from .base import AgentResult, make_agent
 
 SYSTEM = """You are the DOM Mapping Agent in a web-scraping pipeline.
 
@@ -65,11 +65,13 @@ def run_dom_mapping(
     console: Console,
     model: str,
     browser: BrowserSession,
+    api_base_url: str | None = None,
+    api_key: str | None = None,
 ) -> tuple[AgentResult, dict | None]:
     def dispatcher(name: str, args: dict) -> dict:
         return dispatch_browser_tool(browser, name, args)
 
-    agent = AgentClient(
+    agent = make_agent(
         name="dom_mapping",
         system=SYSTEM,
         tools=BROWSER_TOOL_SCHEMAS,
@@ -77,6 +79,8 @@ def run_dom_mapping(
         model=model,
         console=console,
         max_iterations=18,
+        api_base_url=api_base_url,
+        api_key=api_key,
     )
 
     user = (
@@ -92,10 +96,10 @@ def run_dom_mapping(
         out_path.write_text(
             json.dumps(parsed, indent=2, ensure_ascii=False), encoding="utf-8"
         )
-        console.log(f"  [green]✓ dom map saved → {out_path}[/green]")
+        console.log(f"  [green]dom map saved -> {out_path}[/green]")
     else:
         out_path.write_text(result.final_text, encoding="utf-8")
-        console.log(f"  [yellow]⚠ dom map not valid JSON — raw saved to {out_path}[/yellow]")
+        console.log(f"  [yellow]dom map not valid JSON — raw saved to {out_path}[/yellow]")
     return result, parsed
 
 

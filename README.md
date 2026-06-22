@@ -1,9 +1,12 @@
 # scrapy-pipeline
 
-CLI multi-agente para construir scrapers web usando Claude. Le pasás una URL, un
+CLI multi-agente para construir scrapers web usando un LLM. Le pasás una URL, un
 JSON Schema del output esperado y casos de prueba, y un pipeline de 5 agentes
 descubre el sitio, mapea selectores, genera un scraper Python, lo ejecuta y
 evalúa los resultados.
+
+Soporta **Claude (Anthropic)** y cualquier **endpoint OpenAI-compatible** (LLMs
+locales o on-premise como Qwen, LLaMA, etc.).
 
 ## Pipeline
 
@@ -46,12 +49,33 @@ pip install -e .
 # 2. Instalar el navegador de Playwright (solo la primera vez)
 playwright install chromium
 
-# 3. Configurar API key
+# 3. Configurar credenciales
 cp .env.example .env
-# editar .env y poner tu ANTHROPIC_API_KEY
+# editar .env con tu backend (ver sección Configuración del LLM)
 ```
 
 Requiere Python 3.10+.
+
+## Configuración del LLM
+
+El pipeline admite dos backends, configurable via `.env` o flags en cada llamada.
+
+### Opción A — Claude (Anthropic)
+
+```env
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### Opción B — Endpoint OpenAI-compatible (LLM local/on-premise)
+
+```env
+CUSTOM_LLM_BASE_URL=https://tu-servidor/v1
+CUSTOM_LLM_API_KEY=tu-token   # omitir si no requiere auth
+```
+
+Compatible con Qwen, LLaMA, Mistral, vLLM, Ollama, etc. El modelo se
+selecciona mediante el campo `model` que expone el servidor; usa `--model local`
+para pasarle `"default"` o especificá el id exacto con `--model <id>`.
 
 ## Uso
 
@@ -64,17 +88,31 @@ scrapy-pipeline run `
 
 Opciones:
 
-| Flag | Default | Descripción |
-|------|---------|-------------|
-| `--url` | — | URL inicial que ve Discovery |
-| `--schema` | — | JSON Schema del output esperado |
-| `--tests` | — | JSON con `[{name, url, expected}]` |
-| `--model` | `sonnet` | `sonnet` \| `opus` \| `haiku` o un model id completo |
-| `--max-retries` | `2` | Reintentos de Implementation si Evaluation falla |
-| `--slug` | (auto del host) | Nombre del archivo en `scrapers/` |
-| `--show-browser` | off | Ejecuta Playwright con ventana visible (debug) |
+| Flag | Env var | Default | Descripción |
+|------|---------|---------|-------------|
+| `--url` | — | — | URL inicial que ve Discovery |
+| `--schema` | — | — | JSON Schema del output esperado |
+| `--tests` | — | — | JSON con `[{name, url, expected}]` |
+| `--model` | — | `sonnet` | `sonnet` \| `opus` \| `haiku` \| `local` o un model id completo |
+| `--max-retries` | — | `2` | Reintentos de Implementation si Evaluation falla |
+| `--slug` | — | (auto del host) | Nombre del archivo en `scrapers/` |
+| `--show-browser` | — | off | Ejecuta Playwright con ventana visible (debug) |
+| `--custom-api-url` | `CUSTOM_LLM_BASE_URL` | — | URL base del endpoint OpenAI-compatible |
+| `--custom-api-key` | `CUSTOM_LLM_API_KEY` | — | Bearer token del endpoint custom |
 
 Exit codes: `0` PASS, `2` aborto (ej. DOM map inválido), `3` FAIL.
+
+### Usando un endpoint custom por flag
+
+```powershell
+scrapy-pipeline run `
+  --url https://example.com `
+  --schema examples/books_toscrape/schema.json `
+  --tests examples/books_toscrape/tests.json `
+  --custom-api-url https://tu-servidor/v1 `
+  --custom-api-key tu-token `
+  --model local
+```
 
 ### Inspeccionar una corrida previa
 
@@ -135,7 +173,7 @@ python scrapers/books_toscrape.py https://books.toscrape.com/catalogue/a-light-i
   - Implementation → solo `read_file` / `write_file` (sandboxed a `scrapers/` y `runs/`)
   - Test Runner → determinista (subprocess) — corre cada test sin LLM
   - Evaluation → solo `read_file` + diff y jsonschema computados en Python
-- **Prompt caching** activado en `system` y `tools` (Anthropic SDK).
+- **Prompt caching** activado en `system` y `tools` cuando se usa Anthropic SDK.
 - **Feedback loop**: Evaluation emite `VERDICT: PASS` / `VERDICT: FAIL` en su
   primera línea. Si falla, el report completo se pasa como `feedback` al
   Implementation Agent en la próxima iteración.
@@ -144,18 +182,22 @@ python scrapers/books_toscrape.py https://books.toscrape.com/catalogue/a-light-i
 
 ## Troubleshooting
 
-**"ANTHROPIC_API_KEY is not set"** — copiá `.env.example` a `.env` y poné tu key,
-o exportala como variable de entorno.
+**"No LLM configured"** — configurá `ANTHROPIC_API_KEY` (Anthropic) o
+`CUSTOM_LLM_BASE_URL` (endpoint custom) en `.env`, o pasá `--custom-api-url` como flag.
 
 **"Executable doesn't exist at .../chromium..."** — corré `playwright install
 chromium` una vez.
 
 **El DOM Mapping devuelve JSON inválido** — pasa a veces si el modelo envuelve la
 respuesta en markdown. El parser intenta extraer el primer bloque `{...}`. Si
-falla repetidamente, probá `--model opus`.
+falla repetidamente, probá `--model opus` (Anthropic) o un modelo más capaz en
+tu endpoint custom.
 
 **El scraper hace timeout** — subí el timeout del subprocess editando
 `DEFAULT_TIMEOUT` en `scrapy_cli/tools/exec.py`, o reducí los casos de prueba.
+
+**El modelo emite bloques `<think>...</think>`** (Qwen3, DeepSeek-R1, etc.) — el
+pipeline los stripea automáticamente antes de parsear JSON. No requiere configuración.
 
 ## Limitaciones
 

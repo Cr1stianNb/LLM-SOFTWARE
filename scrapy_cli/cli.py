@@ -22,6 +22,7 @@ MODEL_ALIASES = {
     "sonnet": "claude-sonnet-4-6",
     "opus": "claude-opus-4-7",
     "haiku": "claude-haiku-4-5-20251001",
+    "local": "default",
 }
 
 
@@ -73,6 +74,18 @@ def main() -> None:
     is_flag=True,
     help="Run Playwright with a visible browser (headless=False).",
 )
+@click.option(
+    "--custom-api-url",
+    default=None,
+    envvar="CUSTOM_LLM_BASE_URL",
+    help="Base URL of a custom OpenAI-compatible LLM endpoint (e.g. https://host/myllm/v1).",
+)
+@click.option(
+    "--custom-api-key",
+    default=None,
+    envvar="CUSTOM_LLM_API_KEY",
+    help="Bearer token for the custom LLM endpoint.",
+)
 def run(
     url: str,
     schema_path: Path,
@@ -81,14 +94,17 @@ def run(
     max_retries: int,
     slug: str | None,
     show_browser: bool,
+    custom_api_url: str | None,
+    custom_api_key: str | None,
 ) -> None:
-    """Run the full discovery → mapping → impl → test → eval pipeline."""
-    console = Console()
+    """Run the full discovery -> mapping -> impl -> test -> eval pipeline."""
+    console = Console(legacy_windows=False)
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    using_custom = bool(custom_api_url or os.environ.get("CUSTOM_LLM_BASE_URL"))
+    if not using_custom and not os.environ.get("ANTHROPIC_API_KEY"):
         console.print(
-            "[red]ANTHROPIC_API_KEY is not set. "
-            "Create a .env (see .env.example) or export it.[/red]"
+            "[red]No LLM configured. Either set ANTHROPIC_API_KEY (Anthropic) "
+            "or --custom-api-url / CUSTOM_LLM_BASE_URL (custom endpoint).[/red]"
         )
         sys.exit(1)
 
@@ -100,6 +116,9 @@ def run(
 
     model_id = MODEL_ALIASES.get(model, model)
 
+    resolved_api_url = custom_api_url or os.environ.get("CUSTOM_LLM_BASE_URL") or None
+    resolved_api_key = custom_api_key or os.environ.get("CUSTOM_LLM_API_KEY") or None
+
     config = PipelineConfig(
         url=url,
         schema=schema,
@@ -109,14 +128,18 @@ def run(
         max_retries=max_retries,
         headless=not show_browser,
         slug=slug,
+        api_base_url=resolved_api_url,
+        api_key=resolved_api_key,
     )
 
+    backend_label = resolved_api_url or "Anthropic"
     console.print(
         Panel.fit(
             f"[bold]URL[/bold] {url}\n"
             f"[bold]Schema[/bold] {schema_path}\n"
             f"[bold]Tests[/bold] {tests_path} ({len(tests)} cases)\n"
             f"[bold]Model[/bold] {model_id}\n"
+            f"[bold]Backend[/bold] {backend_label}\n"
             f"[bold]Max retries[/bold] {max_retries}",
             title="scrapy-pipeline",
         )
@@ -158,7 +181,7 @@ def run(
 )
 def inspect(run_dir: Path, artifact: str) -> None:
     """Pretty-print an artifact from a previous run."""
-    console = Console()
+    console = Console(legacy_windows=False)
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.exists():
         console.print(f"[red]No manifest.json in {run_dir}[/red]")

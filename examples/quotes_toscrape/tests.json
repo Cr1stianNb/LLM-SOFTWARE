@@ -1,0 +1,29 @@
+[
+  {
+    "name": "albert-einstein",
+    "url": "https://quotes.toscrape.com/author/albert-einstein/",
+    "expected": {
+      "name": "Albert Einstein",
+      "born_date": "March 14, 1879",
+      "born_location": "in Ulm, Germany"
+    }
+  },
+  {
+    "name": "j-k-rowling",
+    "url": "https://quotes.toscrape.com/author/j-k-rowling/",
+    "expected": {
+      "name": "J.K. Rowling",
+      "born_date": "July 31, 1965",
+      "born_location": "in Yate, South Gloucestershire, England, The United Kingdom"
+    }
+  },
+  {
+    "name": "steve-martin",
+    "url": "https://quotes.toscrape.com/author/steve-martin/",
+    "expected": {
+      "name": "Steve Martin",
+      "born_date": "August 14, 1945",
+      "born_location": "in Waco, Texas, The United States"
+    }
+  }
+]

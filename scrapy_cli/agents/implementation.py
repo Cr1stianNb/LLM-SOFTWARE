@@ -12,7 +12,7 @@ from ..tools.filesystem import (
     FilesystemSandbox,
     dispatch_filesystem_tool,
 )
-from .base import AgentClient, AgentResult
+from .base import AgentResult, make_agent
 
 SYSTEM = """You are the Implementation Agent in a web-scraping pipeline.
 
@@ -58,11 +58,13 @@ def run_implementation(
     console: Console,
     model: str,
     feedback: str | None = None,
+    api_base_url: str | None = None,
+    api_key: str | None = None,
 ) -> AgentResult:
     def dispatcher(name: str, args: dict) -> dict:
         return dispatch_filesystem_tool(sandbox, name, args)
 
-    agent = AgentClient(
+    agent = make_agent(
         name="implementation",
         system=SYSTEM,
         tools=FILESYSTEM_TOOL_SCHEMAS,
@@ -71,6 +73,8 @@ def run_implementation(
         console=console,
         max_iterations=10,
         max_tokens=8192,
+        api_base_url=api_base_url,
+        api_key=api_key,
     )
 
     parts = [
@@ -103,5 +107,5 @@ def run_implementation(
     parts.append("Now write the scraper file.")
 
     result = agent.run("\n".join(parts))
-    console.log(f"  [green]✓ scraper written → {scraper_path}[/green]")
+    console.log(f"  [green]scraper written -> {scraper_path}[/green]")
     return result

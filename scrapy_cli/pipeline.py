@@ -31,6 +31,8 @@ class PipelineConfig:
     max_retries: int = 2
     headless: bool = True
     slug: str | None = None
+    api_base_url: str | None = None
+    api_key: str | None = None
 
 
 @dataclass
@@ -47,7 +49,7 @@ class PipelineRun:
 
 
 def execute(config: PipelineConfig, console: Console | None = None) -> PipelineRun:
-    console = console or Console()
+    console = console or Console(legacy_windows=False)
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     slug = config.slug or _slugify(config.url)
     run_dir = config.project_root / "runs" / f"{timestamp}-{slug}"
@@ -93,6 +95,8 @@ def execute(config: PipelineConfig, console: Console | None = None) -> PipelineR
             console=console,
             model=config.model,
             browser=browser,
+            api_base_url=config.api_base_url,
+            api_key=config.api_key,
         )
         plan_md = plan_path.read_text(encoding="utf-8")
 
@@ -106,6 +110,8 @@ def execute(config: PipelineConfig, console: Console | None = None) -> PipelineR
             console=console,
             model=config.model,
             browser=browser,
+            api_base_url=config.api_base_url,
+            api_key=config.api_key,
         )
 
     if dom_map is None:
@@ -135,6 +141,8 @@ def execute(config: PipelineConfig, console: Console | None = None) -> PipelineR
             console=console,
             model=config.model,
             feedback=feedback,
+            api_base_url=config.api_base_url,
+            api_key=config.api_key,
         )
 
         # 4. Test Runner
@@ -146,6 +154,8 @@ def execute(config: PipelineConfig, console: Console | None = None) -> PipelineR
             sandbox=sandbox,
             console=console,
             model=config.model,
+            api_base_url=config.api_base_url,
+            api_key=config.api_key,
         )
 
         # 5. Evaluation
@@ -158,6 +168,8 @@ def execute(config: PipelineConfig, console: Console | None = None) -> PipelineR
             sandbox=sandbox,
             console=console,
             model=config.model,
+            api_base_url=config.api_base_url,
+            api_key=config.api_key,
         )
         pipeline_run.outcome = outcome
 
@@ -172,7 +184,7 @@ def execute(config: PipelineConfig, console: Console | None = None) -> PipelineR
             break
         feedback = outcome.report_md
         console.print(
-            f"[yellow]→ retrying Implementation with evaluation feedback "
+            f"[yellow]-> retrying Implementation with evaluation feedback "
             f"(attempt {attempt + 1} of {config.max_retries + 1})[/yellow]"
         )
 

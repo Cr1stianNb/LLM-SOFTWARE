@@ -15,7 +15,7 @@ from ..tools.filesystem import (
     FilesystemSandbox,
     dispatch_filesystem_tool,
 )
-from .base import AgentClient, AgentResult
+from .base import AgentResult, make_agent
 
 SYSTEM = """You are the Evaluation Agent in a web-scraping pipeline.
 
@@ -140,6 +140,8 @@ def run_evaluation(
     sandbox: FilesystemSandbox,
     console: Console,
     model: str,
+    api_base_url: str | None = None,
+    api_key: str | None = None,
 ) -> EvaluationOutcome:
     per_test = evaluate_deterministic(schema=schema, tests=tests, actual_results=results)
     passing = sum(1 for t in per_test if t["passed"])
@@ -148,7 +150,7 @@ def run_evaluation(
     def dispatcher(name: str, args: dict) -> dict:
         return dispatch_filesystem_tool(sandbox, name, args)
 
-    agent = AgentClient(
+    agent = make_agent(
         name="evaluation",
         system=SYSTEM,
         tools=FILESYSTEM_TOOL_SCHEMAS,
@@ -157,6 +159,8 @@ def run_evaluation(
         console=console,
         max_iterations=4,
         max_tokens=4096,
+        api_base_url=api_base_url,
+        api_key=api_key,
     )
 
     user = (
@@ -172,7 +176,7 @@ def run_evaluation(
     result = agent.run(user)
     report_md = result.final_text.strip()
     out_path.write_text(report_md, encoding="utf-8")
-    console.log(f"  [green]✓ report saved → {out_path}[/green]")
+    console.log(f"  [green]report saved -> {out_path}[/green]")
 
     first_line = report_md.splitlines()[0] if report_md else ""
     verdict_pass = first_line.upper().startswith("VERDICT: PASS")
