@@ -1,4 +1,4 @@
-"""End-to-end pipeline orchestration."""
+"""End-to-end pipeline — single agent + deterministic evaluation, no tool calling."""
 
 from __future__ import annotations
 
@@ -7,18 +7,16 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
+import jsonschema
 from rich.console import Console
 from rich.panel import Panel
 
-from .agents.discovery import run_discovery
-from .agents.dom_mapping import run_dom_mapping
-from .agents.evaluation import EvaluationOutcome, run_evaluation
-from .agents.implementation import run_implementation
-from .agents.test_runner import run_test_runner
+from .agents.discovery import run_discovery, write_scraper
 from .tools.browser import BrowserSession
-from .tools.filesystem import FilesystemSandbox
+from .tools.exec import run_scraper
 
 
 @dataclass
@@ -36,13 +34,22 @@ class PipelineConfig:
 
 
 @dataclass
+class EvaluationOutcome:
+    verdict_pass: bool
+    passing: int
+    total: int
+    per_test: list[dict]
+    report_md: str
+
+
+@dataclass
 class PipelineRun:
     run_dir: Path
     scraper_path: Path
-    plan_path: Path
-    dom_map_path: Path
+    sample_html_path: Path
     results_path: Path
     report_path: Path
+    raw_response_path: Path
     outcome: EvaluationOutcome | None = None
     attempts: int = 0
     artifacts: dict[str, Path] = field(default_factory=dict)
@@ -59,14 +66,11 @@ def execute(config: PipelineConfig, console: Console | None = None) -> PipelineR
     scrapers_dir.mkdir(parents=True, exist_ok=True)
     scraper_path = scrapers_dir / f"{slug}.py"
 
-    plan_path = run_dir / "plan.md"
-    dom_map_path = run_dir / "dom_map.json"
+    sample_html_path = run_dir / "sample.html"
+    raw_response_path = run_dir / "agent_response.md"
     results_path = run_dir / "results.json"
     report_path = run_dir / "report.md"
 
-    sandbox = FilesystemSandbox([scrapers_dir, run_dir])
-
-    # Persist inputs for traceability
     (run_dir / "input_schema.json").write_text(
         json.dumps(config.schema, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -74,105 +78,72 @@ def execute(config: PipelineConfig, console: Console | None = None) -> PipelineR
         json.dumps(config.tests, indent=2, ensure_ascii=False), encoding="utf-8"
     )
 
-    sample_url = (config.tests[0]["url"] if config.tests else config.url)
+    sample_url = config.tests[0]["url"] if config.tests else config.url
 
     pipeline_run = PipelineRun(
         run_dir=run_dir,
         scraper_path=scraper_path,
-        plan_path=plan_path,
-        dom_map_path=dom_map_path,
+        sample_html_path=sample_html_path,
         results_path=results_path,
         report_path=report_path,
+        raw_response_path=raw_response_path,
     )
 
+    # ----- Pre-fetch sample HTML (no LLM yet) -----
+    console.print(Panel.fit("[bold]Pre-fetch[/bold] sample HTML", style="cyan"))
     with BrowserSession(headless=config.headless) as browser:
-        # 1. Discovery
-        console.print(Panel.fit("[bold]1/5 Discovery[/bold]", style="cyan"))
-        run_discovery(
-            url=config.url,
-            schema=config.schema,
-            out_path=plan_path,
-            console=console,
-            model=config.model,
-            browser=browser,
-            api_base_url=config.api_base_url,
-            api_key=config.api_key,
-        )
-        plan_md = plan_path.read_text(encoding="utf-8")
-
-        # 2. DOM Mapping
-        console.print(Panel.fit("[bold]2/5 DOM Mapping[/bold]", style="cyan"))
-        _, dom_map = run_dom_mapping(
-            url=sample_url,
-            schema=config.schema,
-            plan_md=plan_md,
-            out_path=dom_map_path,
-            console=console,
-            model=config.model,
-            browser=browser,
-            api_base_url=config.api_base_url,
-            api_key=config.api_key,
-        )
-
-    if dom_map is None:
-        console.print(
-            "[red]DOM Mapping did not produce valid JSON. Aborting.[/red]"
-        )
+        fetch_result = browser.fetch(sample_url)
+    if not fetch_result.ok:
+        console.print(f"[red]Failed to fetch sample URL: {fetch_result.error}[/red]")
         return pipeline_run
+    sample_html_path.write_text(fetch_result.html, encoding="utf-8")
+    console.log(
+        f"  fetched {fetch_result.total_chars} chars from {sample_url} "
+        f"({'truncated' if fetch_result.truncated else 'full'})"
+    )
 
     feedback: str | None = None
     outcome: EvaluationOutcome | None = None
 
-    for attempt in range(1, config.max_retries + 2):  # +1 initial try, +max_retries extras
+    for attempt in range(1, config.max_retries + 2):
         pipeline_run.attempts = attempt
-        # 3. Implementation
         console.print(
-            Panel.fit(
-                f"[bold]3/5 Implementation[/bold] (attempt {attempt})",
-                style="cyan",
-            )
+            Panel.fit(f"[bold]Discovery[/bold] (attempt {attempt})", style="cyan")
         )
-        run_implementation(
+
+        agent_result = run_discovery(
+            url=config.url,
+            sample_html=fetch_result.html,
             schema=config.schema,
-            dom_map=dom_map,
-            plan_md=plan_md,
-            scraper_path=scraper_path,
-            sandbox=sandbox,
+            tests=config.tests,
             console=console,
             model=config.model,
+            api_base_url=config.api_base_url,
+            api_key=config.api_key,
             feedback=feedback,
-            api_base_url=config.api_base_url,
-            api_key=config.api_key,
+        )
+        raw_response_path.write_text(agent_result.final_text, encoding="utf-8")
+
+        if not write_scraper(agent_result.final_text, scraper_path):
+            console.print(
+                "[red]Agent response did not contain a python code block. "
+                f"See {raw_response_path}.[/red]"
+            )
+            return pipeline_run
+        console.log(f"  [green]scraper written -> {scraper_path}[/green]")
+
+        # ----- Run tests (deterministic) -----
+        console.print(Panel.fit("[bold]Run tests[/bold]", style="cyan"))
+        results = _run_all_tests(scraper_path, config.tests, console)
+        results_path.write_text(
+            json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
-        # 4. Test Runner
-        console.print(Panel.fit("[bold]4/5 Test Runner[/bold]", style="cyan"))
-        _, results = run_test_runner(
-            scraper_path=scraper_path,
-            tests=config.tests,
-            out_path=results_path,
-            sandbox=sandbox,
-            console=console,
-            model=config.model,
-            api_base_url=config.api_base_url,
-            api_key=config.api_key,
-        )
-
-        # 5. Evaluation
-        console.print(Panel.fit("[bold]5/5 Evaluation[/bold]", style="cyan"))
-        outcome = run_evaluation(
-            schema=config.schema,
-            tests=config.tests,
-            results=results,
-            out_path=report_path,
-            sandbox=sandbox,
-            console=console,
-            model=config.model,
-            api_base_url=config.api_base_url,
-            api_key=config.api_key,
-        )
+        # ----- Evaluate (deterministic) -----
+        console.print(Panel.fit("[bold]Evaluate[/bold]", style="cyan"))
+        outcome = _evaluate(config.schema, config.tests, results)
+        report_path.write_text(outcome.report_md, encoding="utf-8")
         pipeline_run.outcome = outcome
-
         console.print(
             f"[bold]{'PASS' if outcome.verdict_pass else 'FAIL'}[/bold] — "
             f"{outcome.passing}/{outcome.total} passing"
@@ -184,11 +155,10 @@ def execute(config: PipelineConfig, console: Console | None = None) -> PipelineR
             break
         feedback = outcome.report_md
         console.print(
-            f"[yellow]-> retrying Implementation with evaluation feedback "
+            f"[yellow]-> retrying Discovery with feedback "
             f"(attempt {attempt + 1} of {config.max_retries + 1})[/yellow]"
         )
 
-    # Save a manifest for `inspect`
     manifest = {
         "url": config.url,
         "model": config.model,
@@ -198,9 +168,9 @@ def execute(config: PipelineConfig, console: Console | None = None) -> PipelineR
         "passing": outcome.passing if outcome else 0,
         "total": outcome.total if outcome else 0,
         "artifacts": {
-            "plan": str(plan_path),
-            "dom_map": str(dom_map_path),
             "scraper": str(scraper_path),
+            "sample_html": str(sample_html_path),
+            "agent_response": str(raw_response_path),
             "results": str(results_path),
             "report": str(report_path),
         },
@@ -210,6 +180,153 @@ def execute(config: PipelineConfig, console: Console | None = None) -> PipelineR
     )
     pipeline_run.artifacts = {k: Path(v) for k, v in manifest["artifacts"].items()}
     return pipeline_run
+
+
+# ----------------------------------------------------------------------
+# Test running
+# ----------------------------------------------------------------------
+
+def _run_all_tests(scraper_path: Path, tests: list[dict], console: Console) -> dict:
+    results = []
+    for test in tests:
+        name = test.get("name") or test["url"]
+        console.log(f"  running {name}")
+        exec_result = run_scraper(str(scraper_path), test["url"])
+        results.append(
+            {
+                "name": name,
+                "url": test["url"],
+                "ok": bool(exec_result.get("ok")),
+                "actual": exec_result.get("result"),
+                "returncode": exec_result.get("returncode"),
+                "stderr": (exec_result.get("stderr") or "")[:1500]
+                if not exec_result.get("ok")
+                else "",
+                "parse_error": exec_result.get("parse_error"),
+            }
+        )
+    return {"scraper_path": str(scraper_path), "results": results}
+
+
+# ----------------------------------------------------------------------
+# Deterministic evaluation
+# ----------------------------------------------------------------------
+
+def _evaluate(schema: dict, tests: list[dict], actual_results: dict) -> EvaluationOutcome:
+    by_name: dict[str, dict] = {}
+    for r in actual_results.get("results", []):
+        key = r.get("name") or r.get("url")
+        by_name[key] = r
+
+    per_test: list[dict] = []
+    for test in tests:
+        name = test.get("name") or test["url"]
+        expected = test.get("expected")
+        actual_entry = by_name.get(name) or {}
+        actual = actual_entry.get("actual")
+
+        schema_errors: list[str] = []
+        if actual is not None:
+            try:
+                jsonschema.validate(instance=actual, schema=schema)
+            except jsonschema.ValidationError as exc:
+                schema_errors.append(exc.message)
+
+        diff = _diff(expected, actual) if expected is not None else []
+        passed = bool(actual_entry.get("ok")) and not schema_errors and not diff
+        per_test.append(
+            {
+                "name": name,
+                "url": test["url"],
+                "passed": passed,
+                "ran_ok": bool(actual_entry.get("ok")),
+                "schema_errors": schema_errors,
+                "diff": diff,
+                "actual": actual,
+                "expected": expected,
+                "stderr": actual_entry.get("stderr") or "",
+            }
+        )
+
+    passing = sum(1 for t in per_test if t["passed"])
+    total = len(per_test)
+    report_md = _render_report(per_test, passing, total)
+    return EvaluationOutcome(
+        verdict_pass=passing == total and total > 0,
+        passing=passing,
+        total=total,
+        per_test=per_test,
+        report_md=report_md,
+    )
+
+
+def _diff(expected: Any, actual: Any, path: str = "") -> list[dict]:
+    out: list[dict] = []
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        keys = set(expected) | set(actual)
+        for k in sorted(keys):
+            sub = f"{path}.{k}" if path else k
+            if k not in actual:
+                out.append({"path": sub, "kind": "missing", "expected": expected[k]})
+            elif k not in expected:
+                out.append({"path": sub, "kind": "unexpected", "actual": actual[k]})
+            else:
+                out.extend(_diff(expected[k], actual[k], sub))
+    elif isinstance(expected, list) and isinstance(actual, list):
+        if len(expected) != len(actual):
+            out.append(
+                {
+                    "path": path,
+                    "kind": "length_mismatch",
+                    "expected_len": len(expected),
+                    "actual_len": len(actual),
+                }
+            )
+        for i in range(min(len(expected), len(actual))):
+            out.extend(_diff(expected[i], actual[i], f"{path}[{i}]"))
+    else:
+        if expected != actual:
+            out.append(
+                {"path": path or "(root)", "kind": "value", "expected": expected, "actual": actual}
+            )
+    return out
+
+
+def _render_report(per_test: list[dict], passing: int, total: int) -> str:
+    verdict = "PASS" if passing == total and total > 0 else "FAIL"
+    lines = [f"VERDICT: {verdict} ({passing}/{total} passing)", ""]
+    for t in per_test:
+        status = "[PASS]" if t["passed"] else "[FAIL]"
+        lines.append(f"## {status} {t['name']}")
+        lines.append(f"- url: {t['url']}")
+        if not t["ran_ok"]:
+            lines.append("- scraper raised an error:")
+            lines.append("```")
+            lines.append((t.get("stderr") or "").strip() or "(no stderr captured)")
+            lines.append("```")
+        if t["schema_errors"]:
+            lines.append("- schema validation errors:")
+            for err in t["schema_errors"]:
+                lines.append(f"  - {err}")
+        if t["diff"]:
+            lines.append("- field diffs (expected vs actual):")
+            for d in t["diff"]:
+                if d["kind"] == "value":
+                    lines.append(
+                        f"  - `{d['path']}`: expected {d['expected']!r}, got {d['actual']!r}"
+                    )
+                elif d["kind"] == "missing":
+                    lines.append(f"  - `{d['path']}`: missing (expected {d['expected']!r})")
+                elif d["kind"] == "unexpected":
+                    lines.append(f"  - `{d['path']}`: unexpected key (got {d['actual']!r})")
+                elif d["kind"] == "length_mismatch":
+                    lines.append(
+                        f"  - `{d['path']}`: length {d['actual_len']} vs expected {d['expected_len']}"
+                    )
+        if t["passed"]:
+            lines.append("- all checks passed.")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _slugify(url: str) -> str:

@@ -1,4 +1,4 @@
-"""Subprocess-based scraper execution tool."""
+"""Subprocess-based scraper execution."""
 
 from __future__ import annotations
 
@@ -8,14 +8,14 @@ import sys
 from pathlib import Path
 
 MAX_OUTPUT_CHARS = 8_000
-DEFAULT_TIMEOUT = 60
+DEFAULT_TIMEOUT = 90
 
 
 def run_scraper(scraper_path: str, url: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
     """Run a generated scraper file as a subprocess and capture its JSON output.
 
-    The scraper module must expose a `scrape(url: str) -> dict` function. We invoke
-    it via a small driver so the agent doesn't have to worry about argv parsing.
+    The scraper module must expose a `scrape(url: str) -> dict` function. We
+    invoke it via a small driver so the scraper doesn't have to parse argv.
     """
     target = Path(scraper_path).resolve()
     if not target.exists():
@@ -66,33 +66,3 @@ def run_scraper(scraper_path: str, url: str, timeout: int = DEFAULT_TIMEOUT) -> 
         "stdout": stdout[:MAX_OUTPUT_CHARS],
         "stderr": stderr[:MAX_OUTPUT_CHARS],
     }
-
-
-EXEC_TOOL_SCHEMAS: list[dict] = [
-    {
-        "name": "run_scraper",
-        "description": (
-            "Execute a generated scraper module against a URL. The module must define "
-            "scrape(url: str) -> dict. Returns the parsed dict (or stdout/stderr on error)."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "scraper_path": {"type": "string"},
-                "url": {"type": "string"},
-                "timeout": {"type": "integer", "default": DEFAULT_TIMEOUT},
-            },
-            "required": ["scraper_path", "url"],
-        },
-    }
-]
-
-
-def dispatch_exec_tool(name: str, args: dict) -> dict:
-    if name == "run_scraper":
-        return run_scraper(
-            args["scraper_path"],
-            args["url"],
-            args.get("timeout", DEFAULT_TIMEOUT),
-        )
-    return {"ok": False, "error": f"unknown exec tool: {name}"}

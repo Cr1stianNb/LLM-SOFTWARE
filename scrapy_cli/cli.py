@@ -175,7 +175,9 @@ def run(
 )
 @click.option(
     "--artifact",
-    type=click.Choice(["plan", "dom_map", "scraper", "results", "report", "manifest"]),
+    type=click.Choice(
+        ["scraper", "results", "report", "sample_html", "agent_response", "manifest"]
+    ),
     default="report",
     show_default=True,
 )
@@ -195,10 +197,12 @@ def inspect(run_dir: Path, artifact: str) -> None:
         console.print(f"[red]Missing artifact: {artifact_path}[/red]")
         sys.exit(1)
     content = artifact_path.read_text(encoding="utf-8")
-    if artifact in {"plan", "report"}:
+    if artifact in {"report", "agent_response"}:
         console.print(Markdown(content))
     elif artifact == "scraper":
         console.print(Syntax(content, "python", line_numbers=True))
+    elif artifact == "sample_html":
+        console.print(Syntax(content, "html"))
     else:
         console.print(Syntax(content, "json"))
 
