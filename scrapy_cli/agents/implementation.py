@@ -25,7 +25,22 @@ Inputs you receive:
 - The discovery plan
 - Optional: feedback from a previous failed run (if this is a retry)
 
-Output module requirements:
+## CRITICAL RULE — DOM MAP IS THE SOURCE OF TRUTH
+
+The DOM map was produced by an agent that inspected the live page. Its selectors
+are verified against the real DOM. You MUST use them VERBATIM.
+
+- Copy every `selector` value from the DOM map exactly as written. Do NOT alter,
+  simplify, split, or "improve" any selector string.
+- Do NOT invent selectors of your own. If a field is not in the DOM map, use None.
+- If feedback says a selector failed, check the DOM map again — the fix is there.
+  Do NOT replace a DOM-map selector with a guessed alternative; instead re-read
+  the DOM map `selector` field and use it as-is.
+
+This rule overrides your intuition about CSS classes or HTML structure.
+
+## Output module requirements
+
 1. File path is provided to you. WRITE the file using `write_file`.
 2. The module MUST expose: `def scrape(url: str) -> dict`.
 3. Use Playwright (sync API) if the DOM map / plan say JS is required, otherwise

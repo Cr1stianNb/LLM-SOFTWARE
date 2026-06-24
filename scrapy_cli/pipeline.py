@@ -182,7 +182,7 @@ def execute(config: PipelineConfig, console: Console | None = None) -> PipelineR
             break
         if attempt > config.max_retries:
             break
-        feedback = outcome.report_md
+        feedback = _build_feedback(outcome.report_md, dom_map)
         console.print(
             f"[yellow]-> retrying Implementation with evaluation feedback "
             f"(attempt {attempt + 1} of {config.max_retries + 1})[/yellow]"
@@ -210,6 +210,20 @@ def execute(config: PipelineConfig, console: Console | None = None) -> PipelineR
     )
     pipeline_run.artifacts = {k: Path(v) for k, v in manifest["artifacts"].items()}
     return pipeline_run
+
+
+def _build_feedback(report_md: str, dom_map: dict) -> str:
+    """Augment the evaluation report with an explicit DOM map selector reminder."""
+    selectors_block = "\n".join(
+        f"  {field}: {info['selector']}"
+        for field, info in (dom_map.get("fields") or {}).items()
+    )
+    return (
+        f"{report_md}\n\n"
+        "---\n"
+        "REMINDER — use these selectors VERBATIM from the DOM map, do not change them:\n"
+        f"{selectors_block}"
+    )
 
 
 def _slugify(url: str) -> str:

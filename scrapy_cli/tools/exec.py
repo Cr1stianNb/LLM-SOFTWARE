@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +32,12 @@ def run_scraper(scraper_path: str, url: str, timeout: int = DEFAULT_TIMEOUT) -> 
         "sys.stdout.write(json.dumps(result, ensure_ascii=False, default=str))\n"
     )
 
+    # Force the child to emit UTF-8 on stdout/stderr. On Windows the default is
+    # the legacy console codepage (cp1252), so non-ASCII scraped text (en-dashes,
+    # accented chars) would be written as cp1252 and break the parent's UTF-8
+    # reader thread with a UnicodeDecodeError.
+    child_env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+
     try:
         proc = subprocess.run(
             [sys.executable, "-c", driver],
@@ -38,6 +45,8 @@ def run_scraper(scraper_path: str, url: str, timeout: int = DEFAULT_TIMEOUT) -> 
             text=True,
             timeout=timeout,
             encoding="utf-8",
+            errors="replace",
+            env=child_env,
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"timeout after {timeout}s", "url": url}
