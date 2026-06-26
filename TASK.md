@@ -11,9 +11,9 @@ especificación. Dada la URL de un sitio, una definición del output esperado y 
 de casos de prueba, la herramienta debe extraer la información solicitada y verificar su corrección
 contra los casos de prueba.
 
-La CLI organiza el trabajo como un **pipeline de cinco etapas** (descritas abajo). Algunas etapas
-razonan con un modelo de lenguaje (LLM) y otras son deterministas. La elección concreta de qué
-etapa usa LLM y cuál no se deja al implementador, dentro de las restricciones de esta especificación.
+La CLI organiza el trabajo como un **pipeline de cinco etapas** (descritas abajo). **Cuatro de las
+cinco etapas razonan mediante un LLM** (Discovery, DOM Mapping, Implementation y Evaluation). La
+única etapa determinista es el **Test Runner**, que ejecuta mecánicamente los casos de prueba.
 
 El lenguaje de implementación lo decide el implementador.
 
@@ -41,20 +41,33 @@ exacto lo decide el implementador, pero debe estar documentado en el `--help` de
 ## El pipeline de cinco etapas
 
 El procesamiento se organiza como un pipeline. Cada etapa recibe el resultado de la anterior.
+Cuatro etapas razonan con un LLM; solo el Test Runner es determinista.
 
-1. **Discovery** — Analiza el sitio y propone cómo obtener la información (qué páginas, qué
-   estrategia de extracción). Esta etapa puede razonar con un LLM.
-2. **DOM Mapping** — Identifica selectores, estructura HTML y nodos del DOM relevantes para cada
-   campo del esquema. Puede combinar heurísticas deterministas con razonamiento de LLM.
-3. **Implementation** — Genera/configura la lógica concreta de extracción a partir del mapeo de la
+1. **Discovery (LLM)** — Analiza el sitio y propone cómo obtener la información (qué páginas, qué
+   estrategia de extracción).
+2. **DOM Mapping (LLM)** — Identifica selectores, estructura HTML y nodos del DOM relevantes para
+   cada campo del esquema.
+3. **Implementation (LLM)** — Genera la lógica concreta de extracción a partir del mapeo de la
    etapa anterior.
-4. **Test Runner** — Ejecuta los casos de prueba definidos contra la extracción.
-5. **Evaluation** — Compara el output real contra el output esperado, campo por campo, y produce el
-   reporte de evaluación y el veredicto.
+4. **Test Runner (determinista)** — Ejecuta mecánicamente los casos de prueba contra la extracción.
+   Esta etapa **no** usa LLM: aplica la extracción y recoge los resultados sin razonamiento.
+5. **Evaluation (LLM)** — Compara el output real contra el output esperado, campo por campo, y
+   produce el reporte de evaluación y el veredicto.
 
-El implementador decide la frontera exacta entre etapas con LLM y etapas deterministas, pero el
-pipeline debe ser observable: debe poder verse el resultado intermedio de cada etapa (por ejemplo,
-con un flag de verbosidad o logs por etapa).
+El pipeline debe ser observable: debe poder verse el resultado intermedio de cada etapa (por
+ejemplo, con un flag de verbosidad o logs por etapa).
+
+## Acceso al LLM (API OpenAI-compatible)
+
+Todas las etapas que usan LLM deben acceder al modelo a través de una **API OpenAI-compatible**
+(esquema de Chat Completions). El modelo a utilizar es **Qwen3** (variante OpenAI-compatible; el ID
+concreto se fija en la configuración del proyecto).
+
+- La configuración debe permitir definir `base_url`, `api_key` (vía variable de entorno) y el `model`
+  sin tocar el código, para poder apuntar a un endpoint local (vLLM, Ollama, LM Studio) o a un
+  proveedor remoto compatible.
+- La clave de API se lee de una variable de entorno; nunca se escribe en el código ni en el
+  repositorio.
 
 ## Estrategia de prueba (sitio real, snapshot congelado)
 
@@ -73,8 +86,8 @@ exactamente el mismo HTML.
 - La CLI expone una ayuda clara (`--help`) que documenta entradas, salidas y flags.
 - El proyecto incluye instrucciones de instalación y de ejecución que funcionan desde cero.
 - El pipeline maneja con gracia los errores previsibles: URL inalcanzable, HTML que no contiene un
-  campo esperado, caso de prueba que no coincide. Ninguno de estos debe producir un fallo no
-  controlado (stack trace sin manejar).
+  campo esperado, caso de prueba que no coincide, o el endpoint del LLM no disponible. Ninguno de
+  estos debe producir un fallo no controlado (stack trace sin manejar).
 - El código está organizado de forma que cada etapa del pipeline sea identificable y testeable por
   separado.
 
@@ -86,4 +99,5 @@ prueba de ejemplo y obtener un reporte de evaluación con veredicto.
 
 > Nota de evaluación (no para el implementador): el éxito verificado (VTS) se mide con una suite de
 > tests independiente y oculta que **no** forma parte de este repositorio y que el implementador no
-> ve durante la construcción.
+> ve durante la construcción. Esa suite es determinista y no depende del Evaluation Agent del
+> producto.
