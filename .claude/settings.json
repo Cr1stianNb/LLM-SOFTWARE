@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python \"C:/Users/crist/AppData/Local/Temp/claude/c--Users-crist-Escritorio-GitHub-LLM-SOFTWARE/1cf9eccb-27d4-4da1-8350-b92d826cb07e/scratchpad/gen_cassette.py\")",
+      "Bash(python -m pip install -r requirements.txt)"
+    ]
+  }
+}

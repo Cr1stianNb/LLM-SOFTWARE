@@ -1,0 +1,9 @@
+{
+  "fields": {
+    "title":        { "type": "string",  "description": "Book title" },
+    "price":        { "type": "number",  "description": "Price in GBP, numeric" },
+    "availability": { "type": "string",  "description": "Stock availability text" },
+    "rating":       { "type": "integer", "description": "Star rating, 1-5" },
+    "upc":          { "type": "string",  "description": "Universal Product Code" }
+  }
+}

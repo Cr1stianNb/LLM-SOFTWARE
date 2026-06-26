@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llmscrape"
+version = "0.1.0"
+description = "Spec-guided web scraping CLI organized as a five-stage LLM pipeline."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.25",
+    "beautifulsoup4>=4.10",
+]
+
+[project.scripts]
+llmscrape = "llmscrape.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["llmscrape*"]

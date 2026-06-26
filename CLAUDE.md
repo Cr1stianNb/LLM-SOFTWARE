@@ -77,14 +77,17 @@ disperses llamadas al LLM por todo el código: una sola interfaz, reutilizada po
 
 ## Comandos de build y ejecución
 
-> Completa esta sección con los comandos reales una vez elijas el lenguaje y las dependencias.
-> Mantenla actualizada: es la referencia que se usará para verificar el criterio de "terminado".
+> Lenguaje elegido: **Python 3.9+**. Dependencias: `requests`, `beautifulsoup4`.
 
-- Instalación: `…`
-- Configuración del LLM (variables de entorno): `…`
-- Ejecución sobre el caso de ejemplo: `…`
-- Ejecución sobre un sitio en vivo: `…`
-- Ayuda: `<cli> --help`
+- Instalación: `python -m pip install -r requirements.txt && python -m pip install -e .`
+- Configuración del LLM (variables de entorno):
+  `export LLM_BASE_URL=http://localhost:8000/v1 LLM_API_KEY=sk-... LLM_MODEL=qwen3-32b`
+- Ejecución sobre el caso de ejemplo (offline, con cassette):
+  `llmscrape run --schema fixtures/example_schema.json --tests fixtures/example_tests.json --llm-mode replay --cassette fixtures/example_cassette.json -v`
+- Ejecución sobre un sitio en vivo:
+  `llmscrape scrape <URL> --schema fixtures/example_schema.json`
+- Tests deterministas: `python -m unittest discover -s tests`
+- Ayuda: `llmscrape --help` (o `python -m llmscrape --help`)
 
 ## Fuera de alcance de este archivo
 
