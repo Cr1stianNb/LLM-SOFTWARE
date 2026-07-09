@@ -33,11 +33,12 @@ def run_scraper(scraper_path: str, url: str, timeout: int = DEFAULT_TIMEOUT) -> 
 
     try:
         proc = subprocess.run(
-            [sys.executable, "-c", driver],
+            [sys.executable, "-X", "utf8", "-c", driver],
             capture_output=True,
             text=True,
             timeout=timeout,
             encoding="utf-8",
+            errors="replace",
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"timeout after {timeout}s", "url": url}
