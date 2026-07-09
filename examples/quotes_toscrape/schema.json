@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Author",
+  "type": "object",
+  "required": ["name", "born_date", "born_location", "description"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Full name of the author as shown in the page heading."
+    },
+    "born_date": {
+      "type": "string",
+      "description": "Date of birth as a string, e.g. 'March 14, 1879'."
+    },
+    "born_location": {
+      "type": "string",
+      "description": "Place of birth as shown, e.g. 'in Ulm, Germany'."
+    },
+    "description": {
+      "type": "string",
+      "description": "Full biographical description paragraph(s) from the author page."
+    }
+  },
+  "additionalProperties": false
+}

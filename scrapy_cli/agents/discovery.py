@@ -1,80 +1,137 @@
-"""Discovery agent — explores the site and proposes a scraping strategy."""
+"""Discovery agent — single agent that produces a full scraper end-to-end.
+
+In this branch the agent does NOT use tool calling. It receives a pre-fetched
+HTML sample of the target page in the prompt and emits a complete Python
+scraper module as text. The orchestrator extracts the code block, writes it to
+disk and runs the tests.
+"""
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from rich.console import Console
 
-from ..tools.browser import BROWSER_TOOL_SCHEMAS, BrowserSession, dispatch_browser_tool
-from .base import AgentClient, AgentResult
+from .base import AgentResult, make_agent
 
-SYSTEM = """You are the Discovery Agent in a web-scraping pipeline.
+SYSTEM = """You are the Discovery Agent — the sole agent in a web-scraping pipeline.
 
-Your job: explore the target website and produce a concise plan describing HOW to
-extract the requested fields. You do NOT write any scraper code.
+Given a target URL, a pre-fetched HTML sample, an expected JSON Schema and a list
+of test cases, you must produce a complete, runnable Python scraper.
 
-You have browser tools. Use them sparingly:
-1. Navigate to the start URL.
-2. Inspect the page structure (title, layout, repeating items).
-3. If the start URL is an index/listing, click into one detail page.
-4. Decide whether the site is static HTML (no JS needed) or requires a browser.
+You have NO tools. Everything you need to inspect the site is already in the
+sample HTML you receive. If a field cannot be located in the sample, make a
+reasonable best guess (the user can iterate).
 
-Produce a final plan in Markdown with the following sections:
+# Output format
 
-## Site overview
-- 1-3 sentences describing what the site is.
-- URL pattern(s) you observed.
+Your response MUST contain exactly one fenced code block tagged `python`. The
+block is the entire scraper file. Do not split the code across multiple blocks.
+Do not include explanatory prose outside the block — it will be discarded.
 
-## Extraction strategy
-- Static fetch (requests + BeautifulSoup) OR full browser (Playwright)?
-- Justify in one sentence based on what you saw.
+# Scraper requirements
 
-## Field-by-field plan
-For each field in the expected schema, describe (in plain English) where on the
-page that field appears and roughly how it should be located (e.g. "inside the
-.product-info block, second <p>"). Do NOT commit to exact CSS selectors yet —
-that is the next agent's job.
+1. Expose `def scrape(url: str) -> dict`.
+2. Use `requests` + `BeautifulSoup` (lxml parser) if the page is static HTML.
+   Use Playwright sync API only if the sample HTML clearly shows JS-rendered
+   content (empty body, hydration markers, etc.).
+3. The returned dict MUST satisfy the provided JSON Schema:
+   - Respect declared types (int, float, string).
+   - Apply obvious transforms: strip currency symbols and convert to float,
+     parse integers out of "In stock (22 available)"-style strings, map
+     star-rating words ("One"/"Two"/.../"Five") to integers 1..5.
+4. Be defensive: if an element is missing, return None for that field rather
+   than crashing.
+5. Add a `if __name__ == "__main__":` block that prints `scrape(sys.argv[1])`
+   as JSON, so the file is also runnable standalone.
+6. Use only stdlib + `requests` + `beautifulsoup4` + `lxml` + `playwright`.
+   No other third-party imports.
+7. Keep the file under ~200 lines. No classes unless strictly necessary.
 
-## Risks & notes
-- Pagination, rate limits, infinite scroll, login walls, CAPTCHA, anti-bot.
-- Anything the next agent should know.
+# Retry feedback
 
-Keep the plan under ~400 words. End your turn with the full Markdown plan as
-your final text response (no tools)."""
+If the user message includes a "PREVIOUS ATTEMPT FAILED" section with diff and
+schema errors from a previous run, treat that as the highest-priority signal and
+fix the scraper accordingly.
+"""
 
 
 def run_discovery(
     *,
     url: str,
+    sample_html: str,
     schema: dict,
-    out_path: Path,
+    tests: list[dict],
     console: Console,
     model: str,
-    browser: BrowserSession,
+    api_base_url: str | None = None,
+    api_key: str | None = None,
+    feedback: str | None = None,
 ) -> AgentResult:
-    def dispatcher(name: str, args: dict) -> dict:
-        return dispatch_browser_tool(browser, name, args)
-
-    agent = AgentClient(
+    agent = make_agent(
         name="discovery",
         system=SYSTEM,
-        tools=BROWSER_TOOL_SCHEMAS,
-        dispatcher=dispatcher,
         model=model,
         console=console,
-        max_iterations=12,
+        api_base_url=api_base_url,
+        api_key=api_key,
+        max_tokens=8192,
     )
 
-    user = (
-        f"Start URL: {url}\n\n"
-        f"Expected output schema (JSON Schema):\n```json\n"
-        f"{json.dumps(schema, indent=2, ensure_ascii=False)}\n```\n\n"
-        "Explore the site and produce the plan."
-    )
+    parts = [
+        f"Target URL: {url}",
+        "",
+        "Expected JSON Schema:",
+        "```json",
+        json.dumps(schema, indent=2, ensure_ascii=False),
+        "```",
+        "",
+        f"Test cases ({len(tests)}):",
+        "```json",
+        json.dumps(tests, indent=2, ensure_ascii=False),
+        "```",
+        "",
+        "Sample HTML (pre-fetched with Playwright, possibly truncated):",
+        "```html",
+        sample_html,
+        "```",
+    ]
+    if feedback:
+        parts.extend(
+            [
+                "",
+                "## PREVIOUS ATTEMPT FAILED",
+                feedback,
+                "",
+                "Rewrite the scraper from scratch addressing the issues above.",
+            ]
+        )
+    parts.extend(["", "Now emit the scraper as a single ```python``` block."])
 
-    result = agent.run(user)
-    out_path.write_text(result.final_text, encoding="utf-8")
-    console.log(f"  [green]✓ plan saved → {out_path}[/green]")
-    return result
+    return agent.run("\n".join(parts))
+
+
+CODE_BLOCK_RE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL)
+
+
+def extract_python_code(text: str) -> str | None:
+    """Pull the first ```python ... ``` block out of an LLM response."""
+    match = CODE_BLOCK_RE.search(text)
+    if match:
+        return match.group(1).rstrip() + "\n"
+    # Fallback: if the response looks like raw Python (starts with import/def), return as-is
+    stripped = text.strip()
+    if stripped.startswith(("import ", "from ", "def ", "#!")):
+        return stripped + "\n"
+    return None
+
+
+def write_scraper(text: str, path: Path) -> bool:
+    code = extract_python_code(text)
+    if code is None:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(code, encoding="utf-8")
+    return True

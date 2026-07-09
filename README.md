@@ -1,57 +1,76 @@
-# scrapy-pipeline
+# scrapy-pipeline · branch `prompt-only`
 
-CLI multi-agente para construir scrapers web usando Claude. Le pasás una URL, un
-JSON Schema del output esperado y casos de prueba, y un pipeline de 5 agentes
-descubre el sitio, mapea selectores, genera un scraper Python, lo ejecuta y
-evalúa los resultados.
+CLI para construir scrapers web usando un LLM. Le pasás una URL, un JSON Schema
+del output esperado y casos de prueba; el pipeline pre-fetchea una página de
+muestra, le pasa el HTML a un único agente que devuelve un scraper Python
+completo, lo ejecuta contra los tests y reporta los diffs.
+
+A diferencia de la rama `custom-agent`, esta variante **no usa tool calling**:
+el modelo solo recibe texto y devuelve texto. Eso la hace compatible con
+cualquier endpoint OpenAI-compatible, incluso si no soporta function calling
+(LLMs locales como Qwen, LLaMA, etc.).
+
+Soporta **Claude (Anthropic)** y cualquier **endpoint OpenAI-compatible**.
 
 ## Pipeline
 
 ```
 URL + schema + tests
-      │
-      ▼
-┌─────────────────┐   Discovery Agent      → runs/<ts>/plan.md
-│ 1. Discovery    │   (Claude + Playwright)
-└────────┬────────┘
-         ▼
-┌─────────────────┐   DOM Mapping Agent    → runs/<ts>/dom_map.json
-│ 2. DOM Mapping  │   (Claude + Playwright)
-└────────┬────────┘
-         ▼
-┌─────────────────┐   Implementation Agent → scrapers/<slug>.py
-│ 3. Implementation│  (Claude + filesystem)
-└────────┬────────┘
-         ▼
-┌─────────────────┐   Test Runner          → runs/<ts>/results.json
-│ 4. Test Runner  │   (subprocess por test)
-└────────┬────────┘
-         ▼
-┌─────────────────┐   Evaluation Agent     → runs/<ts>/report.md
-│ 5. Evaluation   │   (Claude + jsonschema + diff)
-└────────┬────────┘
-         ▼
-   ¿VERDICT: PASS?
-   sí → fin
-   no → vuelve a Implementation con el report como feedback
-        (hasta --max-retries)
+        │
+        ▼
+┌───────────────────┐
+│ Pre-fetch (Pwt.)  │  → runs/<ts>/sample.html
+└─────────┬─────────┘
+          ▼
+┌───────────────────┐  prompt: URL + schema + tests + sample HTML
+│ Discovery Agent   │  ←─── feedback en retry
+│ (single shot LLM) │  → runs/<ts>/agent_response.md
+└─────────┬─────────┘  → scrapers/<slug>.py  (extraído del bloque ```python```)
+          ▼
+┌───────────────────┐
+│ Run tests         │  subprocess por caso
+│ (determinista)    │  → runs/<ts>/results.json
+└─────────┬─────────┘
+          ▼
+┌───────────────────┐  jsonschema.validate + diff recursivo
+│ Evaluate          │  → runs/<ts>/report.md
+│ (determinista)    │     "VERDICT: PASS|FAIL (k/n passing)"
+└─────────┬─────────┘
+          ▼
+    ¿VERDICT: PASS?
+    sí → fin
+    no → vuelve a Discovery con el report como feedback
+         (hasta --max-retries)
 ```
 
 ## Instalación
 
 ```powershell
-# 1. Clonar e instalar deps
 pip install -e .
-
-# 2. Instalar el navegador de Playwright (solo la primera vez)
 playwright install chromium
-
-# 3. Configurar API key
 cp .env.example .env
-# editar .env y poner tu ANTHROPIC_API_KEY
+# editar .env con tu backend (ver Configuración del LLM)
 ```
 
 Requiere Python 3.10+.
+
+## Configuración del LLM
+
+### Opción A — Claude (Anthropic)
+
+```env
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### Opción B — Endpoint OpenAI-compatible (LLM local/on-premise)
+
+```env
+CUSTOM_LLM_BASE_URL=https://tu-servidor/v1
+CUSTOM_LLM_API_KEY=tu-token   # omitir si no requiere auth
+```
+
+Compatible con Qwen, LLaMA, Mistral, vLLM, Ollama, LM Studio, LiteLLM, etc.
+Esta rama **no requiere** que el endpoint soporte function calling.
 
 ## Uso
 
@@ -62,64 +81,39 @@ scrapy-pipeline run `
   --tests examples/books_toscrape/tests.json
 ```
 
-Opciones:
+| Flag | Env | Default | Descripción |
+|------|-----|---------|-------------|
+| `--url` | — | — | URL inicial (también de donde se pre-fetchea HTML si no hay tests) |
+| `--schema` | — | — | JSON Schema del output esperado |
+| `--tests` | — | — | JSON `[{name, url, expected}]` (el primer `url` es el sample) |
+| `--model` | — | `sonnet` | `sonnet` \| `opus` \| `haiku` \| `local` o un model id |
+| `--max-retries` | — | `2` | Reintentos con feedback si falla la evaluación |
+| `--slug` | — | (auto) | Nombre del archivo en `scrapers/` |
+| `--show-browser` | — | off | Playwright con ventana visible (debug) |
+| `--custom-api-url` | `CUSTOM_LLM_BASE_URL` | — | URL base del endpoint OpenAI-compatible |
+| `--custom-api-key` | `CUSTOM_LLM_API_KEY` | — | Bearer token del endpoint custom |
 
-| Flag | Default | Descripción |
-|------|---------|-------------|
-| `--url` | — | URL inicial que ve Discovery |
-| `--schema` | — | JSON Schema del output esperado |
-| `--tests` | — | JSON con `[{name, url, expected}]` |
-| `--model` | `sonnet` | `sonnet` \| `opus` \| `haiku` o un model id completo |
-| `--max-retries` | `2` | Reintentos de Implementation si Evaluation falla |
-| `--slug` | (auto del host) | Nombre del archivo en `scrapers/` |
-| `--show-browser` | off | Ejecuta Playwright con ventana visible (debug) |
-
-Exit codes: `0` PASS, `2` aborto (ej. DOM map inválido), `3` FAIL.
+Exit codes: `0` PASS, `2` aborto (HTML no fetchable o respuesta sin código), `3` FAIL.
 
 ### Inspeccionar una corrida previa
 
 ```powershell
-scrapy-pipeline inspect runs/20260525-143012-books_toscrape --artifact report
+scrapy-pipeline inspect runs/<dir> --artifact report
 ```
 
-`--artifact` admite: `plan`, `dom_map`, `scraper`, `results`, `report`, `manifest`.
-
-## Formato del schema
-
-Un JSON Schema estándar (Draft 2020-12). El Implementation Agent usa los nombres
-y tipos de las `properties` para decidir conversiones; la Evaluation Agent corre
-`jsonschema.validate` contra cada output del scraper.
-
-Ver [`examples/books_toscrape/schema.json`](examples/books_toscrape/schema.json).
-
-## Formato de los tests
-
-Array de objetos, cada uno con:
-
-```json
-{
-  "name": "id-corto-del-caso",
-  "url": "URL específica que el scraper recibe",
-  "expected": { ... output esperado ... }
-}
-```
-
-`expected` es opcional — sin él, Evaluation solo valida el schema (no compara
-valores).
-
-Ver [`examples/books_toscrape/tests.json`](examples/books_toscrape/tests.json).
+`--artifact`: `scraper`, `results`, `report`, `sample_html`, `agent_response`, `manifest`.
 
 ## Estructura de cada corrida
 
 ```
 runs/20260525-143012-books_toscrape/
-├── input_schema.json     # copia del schema usado
-├── input_tests.json      # copia de los tests
-├── plan.md               # output del Discovery Agent
-├── dom_map.json          # output del DOM Mapping Agent
-├── results.json          # outputs reales del scraper por test
-├── report.md             # reporte de Evaluation (VERDICT: PASS/FAIL ...)
-└── manifest.json         # resumen + paths para `inspect`
+├── input_schema.json   # copia del schema usado
+├── input_tests.json    # copia de los tests
+├── sample.html         # HTML pre-fetcheado que vio el agente
+├── agent_response.md   # respuesta cruda del LLM
+├── results.json        # outputs reales del scraper por test
+├── report.md           # reporte determinista (VERDICT + diffs)
+└── manifest.json       # paths para `inspect`
 ```
 
 El scraper generado vive en `scrapers/<slug>.py` y es runnable standalone:
@@ -128,39 +122,39 @@ El scraper generado vive en `scrapers/<slug>.py` y es runnable standalone:
 python scrapers/books_toscrape.py https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html
 ```
 
-## Diseño
+## Diseño (qué cambió respecto a `custom-agent`)
 
-- **Tools por agente**:
-  - Discovery, DOM Mapping → solo browser (Playwright)
-  - Implementation → solo `read_file` / `write_file` (sandboxed a `scrapers/` y `runs/`)
-  - Test Runner → determinista (subprocess) — corre cada test sin LLM
-  - Evaluation → solo `read_file` + diff y jsonschema computados en Python
-- **Prompt caching** activado en `system` y `tools` (Anthropic SDK).
-- **Feedback loop**: Evaluation emite `VERDICT: PASS` / `VERDICT: FAIL` en su
-  primera línea. Si falla, el report completo se pasa como `feedback` al
-  Implementation Agent en la próxima iteración.
-- **Sandbox**: el filesystem tool solo permite leer/escribir bajo
-  `scrapers/` y `runs/<ts>/`. Los agentes no pueden tocar otros archivos del repo.
+- **Un único agente** (`Discovery`). No hay DOM Mapping, Implementation, Test
+  Runner ni Evaluation agents separados. El LLM hace todo el trabajo en una
+  sola llamada.
+- **Sin tool calling**: el modelo recibe el HTML pre-fetcheado dentro del
+  prompt y emite el scraper como texto en un bloque ```` ```python ```` que el
+  orquestador extrae y persiste.
+- **Evaluación 100% determinista**: `jsonschema.validate` + diff recursivo en
+  Python. No hay LLM en la evaluación, así que el verdict es reproducible y
+  barato.
+- **Feedback loop**: si la evaluación falla, el `report.md` completo se pasa
+  como `feedback` al agente en la siguiente iteración (hasta `--max-retries`).
 
 ## Troubleshooting
 
-**"ANTHROPIC_API_KEY is not set"** — copiá `.env.example` a `.env` y poné tu key,
-o exportala como variable de entorno.
+**"No LLM configured"** — configurá `ANTHROPIC_API_KEY` o
+`CUSTOM_LLM_BASE_URL` en `.env`, o pasá `--custom-api-url` por flag.
 
-**"Executable doesn't exist at .../chromium..."** — corré `playwright install
-chromium` una vez.
+**"Agent response did not contain a python code block"** — el modelo emitió
+prosa sin bloque ```` ```python ````. Pasa con modelos chicos; probá con
+`--model opus` o un modelo más capaz en el endpoint custom. El response crudo
+queda en `runs/<dir>/agent_response.md`.
 
-**El DOM Mapping devuelve JSON inválido** — pasa a veces si el modelo envuelve la
-respuesta en markdown. El parser intenta extraer el primer bloque `{...}`. Si
-falla repetidamente, probá `--model opus`.
+**El modelo emite `<think>...</think>`** (Qwen3, DeepSeek-R1, etc.) — el
+pipeline los stripea automáticamente antes de extraer el código.
 
-**El scraper hace timeout** — subí el timeout del subprocess editando
-`DEFAULT_TIMEOUT` en `scrapy_cli/tools/exec.py`, o reducí los casos de prueba.
+**El scraper hace timeout** — subí `DEFAULT_TIMEOUT` en `scrapy_cli/tools/exec.py`.
 
 ## Limitaciones
 
+- El agente solo ve UN sample HTML (el de la primera URL de tests). Si los
+  tests apuntan a páginas estructuralmente distintas, podría fallar.
 - No maneja login flows, CAPTCHAs ni proxies rotatorios.
-- Pensado para sitios con páginas de detalle individuales (un URL → un objeto).
-  Para crawlear listings paginados completos hace falta un agente extra.
-- Los test cases del ejemplo asumen valores estables de [books.toscrape.com](
-  https://books.toscrape.com), que es un sandbox público diseñado para esto.
+- Modelos chicos pueden no producir Python ejecutable en una sola pasada; los
+  retries con feedback ayudan pero no son mágicos.
